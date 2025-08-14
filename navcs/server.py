@@ -1,5 +1,5 @@
 import asyncio
-import protocol
+from . import protocol
 
 class NavCSServerProtocol(asyncio.Protocol):
     def connection_made(self, transport):
