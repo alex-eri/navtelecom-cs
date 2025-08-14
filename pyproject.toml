@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+dynamic = ["version"]
+name = "navtelecom-cs"
+dependencies = [
+  "asyncpg"
+]
+requires-python = ">= 3.8"
+authors = [
+  {name = "aleksandr stepanov", email = "sa@eri.su"},
+
+]
+description = "Navtelecom communication server"
+
+
+[project.scripts]
+navcs = "navcs"
