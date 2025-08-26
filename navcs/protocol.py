@@ -3,6 +3,8 @@ import operator
 import functools
 import asyncio
 from . import constants
+from fastcrc import crc8
+
 
 class Transport:
     data: bytes
@@ -48,8 +50,6 @@ class Transport:
         #     return self.feed(b'')
 
 
-
-
 class App:
     def __init__(self, transport: Transport):
         self.transport = transport
@@ -72,42 +72,50 @@ class App:
             case 0x41 as evtype:  # A архив
                 count = data[2]
                 cursor = data[3:]
-                while count := count - 1:
+                while count:
                     cursor = self.on_message(cursor, evtype)
+                    count -= 1
             case 0x45 as evtype:  # E доп архив
                 count = data[2]
                 cursor = data[3:]
-                while count := count - 1:
+                while count:
                     cursor = self.on_ext_message(cursor, evtype)
+                    count -= 1
             case 0x54 as evtype:  # T эвент
-                index = data[2]
-                self.on_message(data[3:], evtype)
+                index = data[2:6]
+                print(index)
+                cursor = self.on_message(data[6:], evtype)
             case 0x58 as evtype:  # X доп эвэнт
                 index = data[2]
-                self.on_ext_message(data[3:], evtype)
+                cursor = self.on_ext_message(data[3:], evtype)
             case 0x43 as evtype:  # C текущая
-                self.on_message(data[2:], evtype)
-        
-        return b''
+                cursor = self.on_message(data[2:], evtype)
+        tail = cursor[1:]
+        if crc8.nrsc_5(data[:-len(tail)]) == 0:
+            self.commit()
+        return tail
 
-
+    def commit(self):
+        pass #TODO
 
     def on_message(self, message: bytes, evtype):
         cursor = message[:]
-
         for byte_n, bits in enumerate(self.bitfield):
-            for i in range(8):
-                if bool(bits & (1<<i)):
-                    key = byte_n+i
-                    self.on_value(key, cursor[: constants.FLEX_SIZES[key] ])
-                
+            for i in [7, 6, 5, 4, 3, 2, 1, 0]:
+                if bool(bits & (1 << i)):
+                    key = byte_n*8 + 7-i
+                    size = constants.FLEX_SIZES[key]
+                    self.on_value(key+1, cursor[: size], evtype)
+                    cursor = cursor[size:]
+        print(cursor)
+        return cursor
 
-    def on_value(self, key, value):
+    def on_value(self, key, value, evtype):
+        print(self.imei, evtype, key, value)
         pass
 
     def on_ext_message(self, message: bytes, evtype):
         pass
-
 
     def on_ntc(self, data: bytes):
         if data[0:4] != b"@NTC":
@@ -118,21 +126,23 @@ class App:
             raise Exception("bad csp")
         if n > len(data) - 16:
             raise Exception("short data")
-        if functools.reduce(operator.xor, data[16 : 16 + n], csd) != 0:
+        if functools.reduce(operator.xor, data[16: 16 + n], csd) != 0:
             raise Exception("bad csd")
-        self.on_ntc_data(data[16 : 16 + n], idr, ids)
-        return data[16 + n :]
+        self.on_ntc_data(data[16: 16 + n], idr, ids)
+        return data[16 + n:]
 
     def on_ntc_data(self, body: bytes, idr, ids):
-        
+
         if body[:4] == b"*>S:":
             self.on_imei(body[4:])
             self.send_ntc(b"*<S", idr, ids)
 
         elif body[:6] == b"*>FLEX":
-            prot, pver, struct_ver, data_size = struct.unpack_from("<BBBB", body, 6)
-            bitfield = body[10 : 10 + (data_size // 8) + 1]
-            prot, pver, struct_ver = self.on_flex_desc(prot, pver, struct_ver, bitfield)
+            prot, pver, struct_ver, data_size = struct.unpack_from(
+                "<BBBB", body, 6)
+            bitfield = body[10: 10 + (data_size // 8) + 1]
+            prot, pver, struct_ver = self.on_flex_desc(
+                prot, pver, struct_ver, bitfield)
             resp = b"*<FLEX" + struct.pack("<BBB", prot, pver, struct_ver)
             self.send_ntc(resp, idr, ids)
 
