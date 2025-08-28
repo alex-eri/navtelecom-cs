@@ -56,6 +56,11 @@ class Transport:
 class App:
     def __init__(self, transport: Transport):
         self.transport = transport
+        self.callbacks = []
+        self.records = []
+        
+    def register_callback(self, cb):
+        self.callbacks.append(cb)
 
     def on_flex(self, data: bytes):
         # """
@@ -72,32 +77,36 @@ class App:
         cursor = data[:]
         answ = b''
 
-        match data[1]:
-            case 0x41 as evtype:  # A архив
+        evtype = data[1]
+
+        self.records.clear()
+
+        match evtype:
+            case 0x41 :  # A архив
                 count = data[2]
                 cursor = data[3:]
                 for _ in range(count):
                     cursor = self.on_message(cursor, evtype)
                 answ += data[:3]
 
-            case 0x45 as evtype:  # E доп архив
+            case 0x45 :  # E доп архив
                 count = data[2]
                 cursor = data[3:]
                 for _ in range(count):
                     cursor = self.on_ext_message(cursor, evtype)
                 answ += data[:3]
 
-            case 0x54 as evtype:  # T эвент
+            case 0x54 :  # T эвент
                 index = data[2:6]
                 cursor = self.on_message(data[6:], evtype)
                 answ += data[:6]
 
-            case 0x58 as evtype:  # X доп эвэнт
+            case 0x58 :  # X доп эвэнт
                 index = data[2]
                 cursor = self.on_ext_message(data[3:], evtype)
                 answ += data[:3]
 
-            case 0x43 as evtype:  # C текущая
+            case 0x43 :  # C текущая
                 cursor = self.on_message(data[2:], evtype)
                 answ += data[:2]
 
@@ -105,7 +114,7 @@ class App:
         if crc8.nrsc_5(data[:-len(tail)]) != 0:
             self.reject()
         
-        self.commit()
+        self.commit( evtype )
         answ += crc8.nrsc_5(answ).to_bytes(1,'little')                
         self.transport.send(answ)
 
@@ -114,22 +123,28 @@ class App:
     def reject(self):
         self.transport.close()
 
-    def commit(self):
-        pass #TODO
+    def commit(self, evtype):
+        for cb in self.callbacks:
+            cb(self.imei, evtype, self.records)
 
     def on_message(self, message: bytes, evtype):
         cursor = message[:]
+        record = dict()
         for byte_n, bits in enumerate(self.bitfield):
             for i in [7, 6, 5, 4, 3, 2, 1, 0]:
                 if bool(bits & (1 << i)):
                     key = byte_n*8 + 7-i
                     size = constants.FLEX_SIZES[key]
-                    self.on_value(key+1, cursor[: size], evtype)
+                    self.on_value(key+1, cursor[: size], record)
                     cursor = cursor[size:]
+        self.records.append(record)
         return cursor
 
-    def on_value(self, key, value, evtype):
-        print(self.imei, evtype, key, value)
+    def on_value(self, key, value, record):
+        print(self.imei, key, value)
+        
+        record[key] = value
+        
         pass
 
     def on_ext_message(self, message: bytes, evtype):
