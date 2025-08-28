@@ -14,6 +14,9 @@ class Transport:
         self.app = App(self)
         self.tcp = tcp
 
+    def close(self):
+        self.tcp.close()
+
     def send(self, data):
         self.tcp.write(data)
 
@@ -67,33 +70,49 @@ class App:
         # """
 
         cursor = data[:]
+        answ = b''
 
         match data[1]:
             case 0x41 as evtype:  # A архив
                 count = data[2]
                 cursor = data[3:]
-                while count:
+                for _ in range(count):
                     cursor = self.on_message(cursor, evtype)
-                    count -= 1
+                answ += data[:3]
+
             case 0x45 as evtype:  # E доп архив
                 count = data[2]
                 cursor = data[3:]
-                while count:
+                for _ in range(count):
                     cursor = self.on_ext_message(cursor, evtype)
-                    count -= 1
+                answ += data[:3]
+
             case 0x54 as evtype:  # T эвент
                 index = data[2:6]
-                print(index)
                 cursor = self.on_message(data[6:], evtype)
+                answ += data[:6]
+
             case 0x58 as evtype:  # X доп эвэнт
                 index = data[2]
                 cursor = self.on_ext_message(data[3:], evtype)
+                answ += data[:3]
+
             case 0x43 as evtype:  # C текущая
                 cursor = self.on_message(data[2:], evtype)
+                answ += data[:2]
+
         tail = cursor[1:]
-        if crc8.nrsc_5(data[:-len(tail)]) == 0:
-            self.commit()
+        if crc8.nrsc_5(data[:-len(tail)]) != 0:
+            self.reject()
+        
+        self.commit()
+        answ += crc8.nrsc_5(answ).to_bytes(1,'little')                
+        self.transport.send(answ)
+
         return tail
+
+    def reject(self):
+        self.transport.close()
 
     def commit(self):
         pass #TODO
@@ -107,7 +126,6 @@ class App:
                     size = constants.FLEX_SIZES[key]
                     self.on_value(key+1, cursor[: size], evtype)
                     cursor = cursor[size:]
-        print(cursor)
         return cursor
 
     def on_value(self, key, value, evtype):
