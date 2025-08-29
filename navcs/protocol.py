@@ -129,23 +129,23 @@ class App:
 
     def on_message(self, message: bytes, evtype):
         cursor = message[:]
+        print(message.hex())
         record = dict()
         for byte_n, bits in enumerate(self.bitfield):
             for i in [7, 6, 5, 4, 3, 2, 1, 0]:
                 if bool(bits & (1 << i)):
                     key = byte_n*8 + 7-i
                     size = constants.FLEX_SIZES[key]
-                    self.on_value(key+1, cursor[: size], record)
+                    self.on_value(key, cursor[: size], record)
                     cursor = cursor[size:]
         self.records.append(record)
+        print(record)
         return cursor
 
     def on_value(self, key, value, record):
-        print(self.imei, key, value)
+        print(key)
+        record[key+1] = struct.unpack( '<'+constants.FLEX_FORMATS[key], value)
         
-        record[key] = value
-        
-        pass
 
     def on_ext_message(self, message: bytes, evtype):
         pass
@@ -179,9 +179,10 @@ class App:
             resp = b"*<FLEX" + struct.pack("<BBB", prot, pver, struct_ver)
             self.send_ntc(resp, idr, ids)
 
-    def on_flex_desc(self, prot, pver, struct_ver, bitfield):
+    def on_flex_desc(self, prot, pver, struct_ver, bitfield: bytes):
         self.version = prot, pver, struct_ver
         self.bitfield = bitfield
+        print( bitfield.hex())
         return prot, pver, struct_ver
 
     def send_ntc(self, body, idr, ids):
