@@ -4,7 +4,7 @@ import functools
 import asyncio
 from . import constants
 from fastcrc import crc8
-
+import numpy as  np
 
 class Transport:
     data: bytes
@@ -54,6 +54,9 @@ class Transport:
 
 
 class App:
+
+    formater: np.dtype
+
     def __init__(self, transport: Transport):
         self.transport = transport
         self.callbacks = []
@@ -128,24 +131,22 @@ class App:
             cb(self.imei, evtype, self.records)
 
     def on_message(self, message: bytes, evtype):
-        cursor = message[:]
+        # cursor = message[:]
         print(message.hex())
         record = dict()
-        for byte_n, bits in enumerate(self.bitfield):
-            for i in [7, 6, 5, 4, 3, 2, 1, 0]:
-                if bool(bits & (1 << i)):
-                    key = byte_n*8 + 7-i
-                    size = constants.FLEX_SIZES[key]
-                    self.on_value(key, cursor[: size], record)
-                    cursor = cursor[size:]
-        self.records.append(record)
-        print(record)
-        return cursor
+        # for byte_n, bits in enumerate(self.bitfield):
+        #     for i in [7, 6, 5, 4, 3, 2, 1, 0]:
+        #         if bool(bits & (1 << i)):
+        #             key = byte_n*8 + 7-i
+        #             size = constants.FLEX_SIZES[key]
+        #             self.on_value(key, cursor[: size], record)
+        #             cursor = cursor[size:]
 
-    def on_value(self, key, value, record):
-        print(key)
-        record[key+1] = struct.unpack( '<'+constants.FLEX_FORMATS[key], value)
-        
+        record = np.void(message[:self.formater.itemsize]).view(dtype=self.formater, type=np.ndarray)
+
+        self.records.append(record)
+        print(dict(np.ndenumerate(record)))
+        return message[self.formater.itemsize:]
 
     def on_ext_message(self, message: bytes, evtype):
         pass
@@ -182,7 +183,16 @@ class App:
     def on_flex_desc(self, prot, pver, struct_ver, bitfield: bytes):
         self.version = prot, pver, struct_ver
         self.bitfield = bitfield
-        print( bitfield.hex())
+
+        formater = []
+        for byte_n, bits in enumerate(self.bitfield):
+            for i in [7, 6, 5, 4, 3, 2, 1, 0]:
+                if bool(bits & (1 << i)):
+                    index = byte_n*8 + 7-i
+                    formater.append(constants.FLEX_NP[index])
+        print(formater)
+        self.formater = np.dtype(formater)
+        print(self.formater.fields)
         return prot, pver, struct_ver
 
     def send_ntc(self, body, idr, ids):
