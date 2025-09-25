@@ -5,13 +5,28 @@ import asyncio
 from . import constants
 from fastcrc import crc8
 import numpy as  np
+import json
+
+
+def to_python(npdata):
+    if isinstance(npdata, (np.ndarray, np.generic)):
+        data = npdata.tolist()
+        # если тип данных не `void`, то вложенных структур нет
+        return data if npdata.dtype.char != 'V' else to_python(data)
+    if isinstance(npdata, (list, tuple)):
+        # `tolist` возвращает `tuple` на скалярных величинах
+        # сложной структуры и `list` на массивах; проверяем их 
+        # на наличие более глубоких вложенных структур
+        return type(npdata)(map(to_python, npdata))
+    return npdata
+
 
 class Transport:
     data: bytes
 
-    def __init__(self, tcp: asyncio.transports.Transport):
+    def __init__(self, tcp: asyncio.transports.Transport, queue: asyncio.Queue):
         self.data = bytes()
-        self.app = App(self)
+        self.app = App(self, queue)
         self.tcp = tcp
 
     def close(self):
@@ -57,13 +72,16 @@ class App:
 
     formater: np.dtype
 
-    def __init__(self, transport: Transport):
+    def __init__(self, transport: Transport, queue: asyncio.Queue):
         self.transport = transport
-        self.callbacks = []
+        # self.callbacks = []
         self.records = []
+        self.queue = queue
+        self.object_id, self.control_id = 0, 0
+        self.imei = b''
         
-    def register_callback(self, cb):
-        self.callbacks.append(cb)
+    # def register_callback(self, cb):
+    #     self.callbacks.append(cb)
 
     def on_flex(self, data: bytes):
         # """
@@ -81,7 +99,7 @@ class App:
         answ = b''
 
         evtype = data[1]
-
+        print(evtype)
         self.records.clear()
 
         match evtype:
@@ -114,25 +132,30 @@ class App:
                 answ += data[:2]
 
         tail = cursor[1:]
-        if crc8.nrsc_5(data[:-len(tail)]) != 0:
-            self.reject()
         
-        self.commit( evtype )
+        if crc8.nrsc_5(data[:len(data)-len(tail)]) != 0:
+            self.reject('src')
+            return
+        
+        asyncio.create_task(self.commit( self.object_id, self.control_id, self.imei, self.records, evtype ))
         answ += crc8.nrsc_5(answ).to_bytes(1,'little')                
         self.transport.send(answ)
 
         return tail
 
-    def reject(self):
+    def reject(self, reason:str=None):
+        print('reject', reason)
         self.transport.close()
 
-    def commit(self, evtype):
-        for cb in self.callbacks:
-            cb(self.imei, evtype, self.records)
+    async def commit(self, object_id, control_id, imei, records, evtype):
+        await self.queue.put((object_id, control_id, imei, records, evtype))
+        # for cb in self.callbacks:
+        #     cb(self.imei, evtype, self.records)
 
     def on_message(self, message: bytes, evtype):
+        
         # cursor = message[:]
-        print(message.hex())
+        #print(message.hex())
         record = dict()
         # for byte_n, bits in enumerate(self.bitfield):
         #     for i in [7, 6, 5, 4, 3, 2, 1, 0]:
@@ -143,9 +166,13 @@ class App:
         #             cursor = cursor[size:]
 
         record = np.void(message[:self.formater.itemsize]).view(dtype=self.formater, type=np.ndarray)
+        recordp = dict(zip(self.formater.names,to_python(record)))
 
-        self.records.append(record)
-        print(dict(np.ndenumerate(record)))
+        self.records.append(recordp)
+        #print(dict(np.ndenumerate(record)))
+        
+        #print(record['10'],record['11'])
+        
         return message[self.formater.itemsize:]
 
     def on_ext_message(self, message: bytes, evtype):
@@ -156,6 +183,8 @@ class App:
             raise Exception("bad packet")
         head = data[0:16]
         idr, ids, n, csd, csp = struct.unpack_from("<LLHBB", head, 4)
+        self.object_id, self.control_id = ids, idr
+        
         if functools.reduce(operator.xor, head, 0) != 0:
             raise Exception("bad csp")
         if n > len(data) - 16:
@@ -190,9 +219,9 @@ class App:
                 if bool(bits & (1 << i)):
                     index = byte_n*8 + 7-i
                     formater.append(constants.FLEX_NP[index])
-        print(formater)
+        #print(formater)
         self.formater = np.dtype(formater)
-        print(self.formater.fields)
+        #print(self.formater.fields)
         return prot, pver, struct_ver
 
     def send_ntc(self, body, idr, ids):
