@@ -1,9 +1,9 @@
 import asyncio
-from . import server
-from . import db
 import sys, os
 
 async def main():
+    from . import server
+    from . import db
     loop = asyncio.get_running_loop()
 
     queue = asyncio.Queue()
