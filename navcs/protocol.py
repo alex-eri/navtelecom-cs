@@ -6,7 +6,11 @@ from . import constants
 from fastcrc import crc8
 import numpy as  np
 import json
+import logging
 
+import time
+
+logger = logging.getLogger('protocol')
 
 def to_python(npdata):
     if isinstance(npdata, (np.ndarray, np.generic)):
@@ -35,6 +39,13 @@ class Transport:
     def send(self, data):
         self.tcp.write(data)
 
+    async def ping(self):
+        await asyncio.sleep(1)
+        while True:
+            logger.debug('p>')
+            self.send(0x7F.to_bytes(1,'little'))
+            await asyncio.sleep(600)
+
     def feed(self, data):
         self.data += data
 
@@ -45,6 +56,11 @@ class Transport:
                 self.data = self.app.on_flex(self.data)
             case 0x7F:  # DEL
                 self.data = self.data[1:]
+                logger.debug('p<')
+                self.send(0x7F.to_bytes(1,'little'))
+                logger.debug('p>')
+
+        
 
         # i = self.data.find(b'@NTC')
         # if i>0:
@@ -99,7 +115,7 @@ class App:
         answ = b''
 
         evtype = data[1]
-        print(evtype)
+        #print(evtype)
         self.records.clear()
 
         match evtype:
@@ -144,7 +160,7 @@ class App:
         return tail
 
     def reject(self, reason:str=None):
-        print('reject', reason)
+        logger.error('reject %s', reason)
         self.transport.close()
 
     async def commit(self, object_id, control_id, imei, records, evtype):

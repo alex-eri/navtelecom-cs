@@ -3,7 +3,7 @@ import asyncpg
 import json
 import logging
 
-logger = logging.Logger("db")
+logger = logging.getLogger("db-consumer")
 import pprint
 
 
@@ -16,8 +16,10 @@ class Writer:
 
     async def start(self):
         self.pool = await asyncpg.create_pool(self.db, min_size=1, max_size=2)
+        logger.debug('db connected')
         self.runner = asyncio.create_task(self.run())
-
+        logger.debug('db consumer started')
+        
         def run_lost(t: asyncio.Task):
             logger.error("db loop broken")
             if e := t.exception():
@@ -33,7 +35,8 @@ class Writer:
 
             try:
                 object_id, control_id, imei, records, evtype = await self.queue.get()
-                # logger.debug(pprint.pformat([object_id, control_id, imei, len(records), evtype]))
+                evtype:int
+                logger.debug(pprint.pformat([object_id, control_id, imei, len(records), f"{evtype:X}"]))
                 async with self.pool.acquire() as con:
                     con: asyncpg.Connection
                     for record in records:
